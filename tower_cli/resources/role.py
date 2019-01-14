@@ -15,12 +15,14 @@
 # limitations under the License.
 
 import click
+import re
 
 from tower_cli import models, resources, exceptions as exc
 from tower_cli.api import client
 from tower_cli.cli import types
 from tower_cli.utils import debug, grammar
 from tower_cli.conf import settings
+from copy import copy
 
 
 ACTOR_FIELDS = ['user', 'team']
@@ -284,7 +286,7 @@ class Resource(models.Resource):
     # TODO: write commands to see access_list for resource
     @resources.command(
         use_fields_as_options=ACTOR_FIELDS+RESOURCE_FIELDS+['type'])
-    def list(self, **kwargs):
+    def list(self, all_pages=False, **kwargs):
         """Return a list of roles.
 
         =====API DOCS=====
@@ -303,7 +305,28 @@ class Resource(models.Resource):
         =====API DOCS=====
         """
         data, self.endpoint = self.data_endpoint(kwargs)
-        r = super(Resource, self).list(**data)
+
+        # Handle all_pages here, because the 'team' filter for roles requires special handling
+        if all_pages:
+            data.pop('page', None)
+            data.pop('page_size', None)
+            debug.log('Getting records.', header='details')
+            r = super(Resource, self).read(**data)
+            for key in ('next', 'previous'):
+                if not r.get(key):
+                    continue
+                match = re.search(r'page=(?P<num>[\d]+)', r[key])
+                if match is None and key == 'previous':
+                    r[key] = 1
+                    continue
+                r[key] = int(match.groupdict()['num'])
+            if r['next']:
+                cursor = copy(r)
+                while cursor['next']:
+                    cursor = self.list(**dict(kwargs, page=cursor['next']))
+                    r['results'] += cursor['results']
+        else:
+            r = super(Resource, self).list(**data)
 
         # Change display settings and data format for human consumption
         self.configure_display(r)
